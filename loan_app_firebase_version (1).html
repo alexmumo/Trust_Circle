@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trust Circle App</title>
+
+  <!-- Firebase v10 modular -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, increment } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // 🔥 REPLACE WITH YOUR FIREBASE CONFIG
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentUser = null;
+    let confirmationResultGlobal = null;
+
+    // 🔐 SETUP RECAPTCHA
+    window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      'size': 'invisible'
+    });
+
+    // 🔐 LOGIN FUNCTION (REAL OTP)
+    window.sendOTP = async () => {
+      const phone = document.getElementById("phone").value;
+      confirmationResultGlobal = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
+      alert("OTP sent to " + phone);
+    };
+
+    window.verifyOTP = async () => {
+      const code = document.getElementById("otp").value;
+      const result = await confirmationResultGlobal.confirm(code);
+      currentUser = result.user.phoneNumber;
+
+      await setDoc(doc(db, "users", currentUser), {
+        phone: currentUser,
+        points: 0,
+        hasActiveLoan: false
+      }, { merge: true });
+
+      alert("Login successful");
+    };
+
+    // 💰 REQUEST LOAN
+    window.requestLoan = async () => {
+      const amount = document.getElementById("amount").value;
+      const guarantors = document.getElementById("guarantors").value.split(",");
+
+      const userRef = doc(db, "users", currentUser);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.data().hasActiveLoan) {
+        alert("You already have an active loan");
+        return;
+      }
+
+      await addDoc(collection(db, "loans"), {
+        userId: currentUser,
+        amount: amount,
+        guarantors: guarantors,
+        status: "active",
+        timestamp: new Date()
+      });
+
+      await updateDoc(userRef, { hasActiveLoan: true });
+
+      alert("Send money to 0707674585 via M-Pesa");
+      alert("Thank you for your request!");
+    };
+
+    // 🔁 REPAY LOAN
+    window.repayLoan = async () => {
+      const q = query(collection(db, "loans"), where("userId", "==", currentUser), where("status", "==", "active"));
+      const snapshot = await getDocs(q);
+
+      snapshot.forEach(async (loan) => {
+        await updateDoc(doc(db, "loans", loan.id), { status: "repaid" });
+      });
+
+      const userRef = doc(db, "users", currentUser);
+      await updateDoc(userRef, {
+        hasActiveLoan: false,
+        points: increment(10)
+      });
+
+      alert("Loan repaid! Points added.");
+    };
+
+    // 📊 ADMIN VIEW
+    window.loadLoans = async () => {
+      const list = document.getElementById("loanList");
+      list.innerHTML = "";
+
+      const snapshot = await getDocs(collection(db, "loans"));
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        const li = document.createElement("li");
+        li.textContent = `${data.userId} borrowed ${data.amount} - ${data.status}`;
+        list.appendChild(li);
+      });
+    };
+  </script>
+</head>
+<body>
+  <h2>Login</h2>
+  <input type="text" id="phone" placeholder="+2547XXXXXXXX" />
+  <button onclick="sendOTP()">Send OTP</button>
+  <input type="text" id="otp" placeholder="Enter OTP" />
+  <button onclick="verifyOTP()">Verify</button>
+  <div id="recaptcha-container"></div>
+
+  <h2>Request Loan</h2>
+  <input type="number" id="amount" placeholder="Amount" />
+  <input type="text" id="guarantors" placeholder="Guarantors (comma separated)" />
+  <button onclick="requestLoan()">Request Loan</button>
+
+  <h2>Repay Loan</h2>
+  <button onclick="repayLoan()">Repay Loan</button>
+
+  <h2>Admin Dashboard</h2>
+  <button onclick="loadLoans()">Load Loans</button>
+  <ul id="loanList"></ul>
+</body>
+</html>
